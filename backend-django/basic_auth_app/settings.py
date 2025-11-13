@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
+    'django_celery_results',
     # 'iam',
     'api'
 ]
@@ -184,3 +185,18 @@ EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")
 
 BACKEND_BASE_URL = os.environ.get('BACKEND_BASE_URL', "http://localhost:8000")
 FRONTEND_BASE_URL = os.environ.get('FRONTEND_BASE_URL', "http://localhost:8000")
+
+# Celery Configuration
+# Redis is used as the message broker
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL')
+
+if not CELERY_BROKER_URL:
+    raise Exception('Missing CELERY BROKER URL')
+
+# Django database is used as the result backend
+CELERY_RESULT_BACKEND = 'django-db'
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Kolkata'
+CELERY_CACHE_BACKEND = 'django-cache'
