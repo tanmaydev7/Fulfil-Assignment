@@ -73,7 +73,12 @@ export default defineConfig({
 			template: "./index.html"
 		}),
 		isDev ? new ReactRefreshRspackPlugin() : null,
-		isDev ? new DotenvWebpackPlugin() : null
+		// Use dotenv-webpack for local development, but rely on Vercel env vars for production
+		new DotenvWebpackPlugin({
+			path: isDev ? path.resolve(__dirname, '.env') : undefined, // Only use .env file in dev
+			systemvars: true, // Use system environment variables (important for Vercel)
+			silent: true, // Don't warn if .env file is missing
+		}),
 	].filter(Boolean),
 	optimization: {
 		minimizer: [
