@@ -13,7 +13,7 @@ import axios from "axios";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 
-const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.BACKEND_URL
 
 interface Webhook {
   id: number;

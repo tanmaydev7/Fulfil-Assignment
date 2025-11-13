@@ -22,7 +22,7 @@ import { WebhookDialog } from "../components/WebhookDialog";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 
-const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.BACKEND_URL
 
 interface Webhook {
   id: number;
