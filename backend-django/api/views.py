@@ -91,6 +91,7 @@ class ProductUploadView(APIView):
             # Ensure media directory exists
             media_root = settings.MEDIA_ROOT
             uploads_dir = os.path.join(media_root, 'uploads')
+            print(uploads_dir)
             os.makedirs(uploads_dir, exist_ok=True)
             
             # Check if this is a chunked upload (end parameter present) or complete upload

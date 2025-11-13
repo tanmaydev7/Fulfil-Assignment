@@ -7,6 +7,7 @@ from django.conf import settings
 from .models import Product, Webhook
 import pandas as pd
 import os
+import gc
 from django.db import transaction
 
 
@@ -14,6 +15,7 @@ from django.db import transaction
 def bulk_delete_products(product_ids):
     """
     Celery task to delete multiple products in the background.
+    Optimized for memory efficiency by processing in batches.
     
     Args:
         product_ids: List of product IDs to delete
@@ -23,18 +25,31 @@ def bulk_delete_products(product_ids):
     """
     deleted_count = 0
     errors = []
+    BATCH_SIZE = 10  # Process in batches to avoid memory issues
     
     try:
-        with transaction.atomic():
-            for product_id in product_ids:
-                try:
-                    product = Product.objects.get(id=product_id)
-                    product.delete()
-                    deleted_count += 1
-                except Product.DoesNotExist:
-                    errors.append(f"Product with id '{product_id}' not found")
-                except Exception as e:
-                    errors.append(f"Error deleting product {product_id}: {str(e)}")
+        # Process in batches to avoid loading all products into memory
+        for i in range(0, len(product_ids), BATCH_SIZE):
+            batch_ids = product_ids[i:i + BATCH_SIZE]
+            
+            with transaction.atomic():
+                # Check which IDs exist before deleting
+                existing_ids = set(Product.objects.filter(id__in=batch_ids).values_list('id', flat=True))
+                
+                # Use bulk delete for efficiency
+                deleted_batch = Product.objects.filter(id__in=batch_ids).delete()[0]
+                deleted_count += deleted_batch
+                
+                # Check for any IDs that weren't found
+                for product_id in batch_ids:
+                    if product_id not in existing_ids:
+                        errors.append(f"Product with id '{product_id}' not found")
+                
+                # Clear from memory
+                del existing_ids
+            
+            # Force garbage collection after each batch
+            gc.collect()
         
         result = {
             "deleted": deleted_count,
@@ -43,10 +58,11 @@ def bulk_delete_products(product_ids):
         }
         
         # Trigger webhook for product.bulk_deleted after async deletion completes
+        # Use only count, not full list of IDs to reduce memory
         trigger_webhooks_task.apply_async(args=['product.bulk_deleted', {
             "deleted": deleted_count,
             "total": len(product_ids),
-            "ids": product_ids
+            "ids": []  # Don't include full ID list in payload to save memory
         }])
         
         return result
@@ -59,6 +75,7 @@ def trigger_webhooks_task(event_type, payload):
     """
     Celery task to trigger webhooks for a given event type.
     This task fetches webhooks from the database and triggers them asynchronously.
+    Optimized for memory efficiency.
     
     Args:
         event_type: The event type (e.g., 'product.created', 'product.updated')
@@ -70,22 +87,31 @@ def trigger_webhooks_task(event_type, payload):
     try:
         from .models import Webhook
         
-        # Get all enabled webhooks
-        all_webhooks = Webhook.objects.filter(enabled=True)
+        # Get all enabled webhooks and filter in Python to avoid JSONField query issues
+        # Use values_list to avoid loading full objects into memory
+        all_webhooks = Webhook.objects.filter(enabled=True).values_list('id', 'event_types')
         
         # Filter webhooks that subscribe to this event type
-        webhooks = [
-            webhook for webhook in all_webhooks
-            if event_type in (webhook.event_types or [])
+        webhook_ids = [
+            webhook_id for webhook_id, event_types in all_webhooks
+            if event_type in (event_types or [])
         ]
         
+        # Clear from memory
+        del all_webhooks
+        
         # Trigger each webhook asynchronously
-        for webhook in webhooks:
-            send_webhook.delay(webhook.id, event_type, payload)
+        for webhook_id in webhook_ids:
+            send_webhook.delay(webhook_id, event_type, payload)
+        
+        # Clear the list from memory
+        webhook_count = len(webhook_ids)
+        del webhook_ids
+        gc.collect()
         
         return {
             "success": True,
-            "webhooks_triggered": len(webhooks),
+            "webhooks_triggered": webhook_count,
             "event_type": event_type
         }
     except Exception as e:
@@ -227,7 +253,7 @@ def process_product_file(file_path):
         dict: Processing results with success count, error count, and errors
     """
     success_count = 0
-    chunksize = 100  # Read and process CSV in chunks of 100 rows
+    chunksize = 10  # Read and process CSV in chunks of 100 rows
     
     try:
         # Validate CSV columns first
@@ -238,59 +264,63 @@ def process_product_file(file_path):
             # Raise exception so Celery marks task as FAILURE
             raise ValueError(column_validation['error'])
         
-        # Process CSV in chunks using transaction
-        # If any write fails, the entire transaction will rollback
-        with transaction.atomic():
-            row_number = 0
+        # Process CSV in chunks with smaller transactions to reduce memory usage
+        row_number = 0
+        batch_errors = []
+        
+        # Read CSV file in chunks and process each chunk as a batch
+        for chunk_df in pd.read_csv(file_path, encoding='utf-8', chunksize=chunksize):
+            # Replace NaN values with empty strings
+            chunk_df = chunk_df.fillna('')
             
-            # Read CSV file in chunks and process each chunk as a batch
-            for chunk_df in pd.read_csv(file_path, encoding='utf-8', chunksize=chunksize):
-                # Replace NaN values with empty strings
-                chunk_df = chunk_df.fillna('')
+            # Prepare batch for this chunk
+            batch = []
+            
+            # Validate and prepare each row in chunk
+            for _, row in chunk_df.iterrows():
+                row_number += 1
+                product_data = row.to_dict()
                 
-                # Convert chunk to list of dictionaries
-                chunk_data = chunk_df.to_dict('records')
+                # Validate SKU (must not be empty)
+                validation_error = _validate_product_data(product_data, row_number)
+                if validation_error:
+                    # Fail entire upload if validation fails
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    raise ValueError(validation_error)
                 
-                # Prepare batch for this chunk
-                batch = []
+                # Prepare product data
+                sku = str(product_data.get('sku', '')).strip()
+                name = str(product_data.get('name', '')).strip() if product_data.get('name') is not None else ''
+                description = str(product_data.get('description', '')).strip() if product_data.get('description') is not None else ''
+                status = str(product_data.get('status', 'active')).strip().lower() if product_data.get('status') is not None else 'active'
                 
-                # Validate and prepare each row in chunk
-                for product_data in chunk_data:
-                    row_number += 1
-                    
-                    # Validate SKU (must not be empty)
-                    validation_error = _validate_product_data(product_data, row_number)
-                    if validation_error:
-                        # Fail entire upload if validation fails
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                        raise ValueError(validation_error)
-                    
-                    # Prepare product data
-                    sku = str(product_data.get('sku', '')).strip()
-                    name = str(product_data.get('name', '')).strip() if product_data.get('name') is not None else ''
-                    description = str(product_data.get('description', '')).strip() if product_data.get('description') is not None else ''
-                    status = str(product_data.get('status', 'active')).strip().lower() if product_data.get('status') is not None else 'active'
-                    
-                    # Validate status
-                    if status not in ['active', 'inactive']:
-                        status = 'active'
-                    
-                    # Add to batch
-                    batch.append({
-                        'sku': sku,
-                        'name': name,
-                        'description': description,
-                        'status': status
-                    })
+                # Validate status
+                if status not in ['active', 'inactive']:
+                    status = 'active'
                 
-                # Process the entire chunk as a batch
-                if batch:
+                # Add to batch
+                batch.append({
+                    'sku': sku,
+                    'name': name,
+                    'description': description,
+                    'status': status
+                })
+            
+            # Process each chunk in its own transaction to reduce memory usage
+            if batch:
+                with transaction.atomic():
                     batch_success, batch_errors = _process_batch(batch)
                     success_count += batch_success
                     if batch_errors:
-                        # If any batch write fails, raise exception to rollback transaction
+                        # If any batch write fails, raise exception
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
                         raise ValueError(f"Batch write failed: {batch_errors[0]}")
+            
+            # Clear chunk from memory and force garbage collection
+            del chunk_df, batch
+            gc.collect()
         
         # Clean up file after successful processing
         if os.path.exists(file_path):
@@ -378,16 +408,20 @@ def _process_batch(batch):
     Process a batch of products using bulk_create and bulk_update.
     This function is called within a transaction, so if it raises an exception,
     the entire transaction will rollback.
+    Optimized for memory efficiency.
     Returns (success_count, errors).
     Raises exception if any write fails.
     """
     success_count = 0
     errors = []
     
-    # Get existing SKUs
-    existing_skus = set(Product.objects.filter(
-        sku__in=[item['sku'] for item in batch]
-    ).values_list('sku', flat=True))
+    # Get existing SKUs - use iterator to avoid loading all into memory
+    batch_skus = [item['sku'] for item in batch]
+    existing_skus = set(
+        Product.objects.filter(sku__in=batch_skus)
+        .values_list('sku', flat=True)
+        .iterator(chunk_size=100)
+    )
     
     # Separate into updates and creates
     to_create = []
@@ -411,34 +445,48 @@ def _process_batch(batch):
             for item in to_create
         ]
         try:
-            Product.objects.bulk_create(products_to_create, ignore_conflicts=False)
+            Product.objects.bulk_create(products_to_create, ignore_conflicts=False, batch_size=100)
             success_count += len(products_to_create)
+            # Clear from memory
+            del products_to_create
         except Exception as e:
             raise ValueError(f"Failed to create products: {str(e)}")
     
-    # Bulk update existing products
+    # Bulk update existing products - use bulk_update with queryset
     if to_update:
-        products_to_update = []
-        for item in to_update:
-            try:
-                product = Product.objects.get(sku=item['sku'])
-                product.name = item['name']
-                product.description = item['description']
-                product.status = item['status']
-                products_to_update.append(product)
-            except Product.DoesNotExist:
-                raise ValueError(f"SKU {item['sku']} not found for update")
-            except Exception as e:
-                raise ValueError(f"Error updating product {item['sku']}: {str(e)}")
+        # Get all products to update in one query
+        update_skus = [item['sku'] for item in to_update]
+        products_to_update = list(
+            Product.objects.filter(sku__in=update_skus)
+            .only('id', 'sku', 'name', 'description', 'status')
+        )
+        
+        # Create a mapping for quick lookup
+        sku_to_data = {item['sku']: item for item in to_update}
+        
+        # Update products in memory
+        for product in products_to_update:
+            if product.sku in sku_to_data:
+                data = sku_to_data[product.sku]
+                product.name = data['name']
+                product.description = data['description']
+                product.status = data['status']
         
         if products_to_update:
             try:
                 Product.objects.bulk_update(
                     products_to_update,
-                    ['name', 'description', 'status']
+                    ['name', 'description', 'status'],
+                    batch_size=100
                 )
                 success_count += len(products_to_update)
+                # Clear from memory
+                del products_to_update, sku_to_data
             except Exception as e:
                 raise ValueError(f"Failed to update products: {str(e)}")
+    
+    # Clear batch data from memory
+    del batch, existing_skus, to_create, to_update
+    gc.collect()
     
     return success_count, errors
