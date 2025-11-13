@@ -81,7 +81,6 @@ def trigger_webhooks_task(event_type, payload):
         
         # Trigger each webhook asynchronously
         for webhook in webhooks:
-            print("wbhk", webhook)
             send_webhook.delay(webhook.id, event_type, payload)
         
         return {
@@ -215,23 +214,6 @@ def send_webhook(webhook_id, event_type, payload):
 
 
 @shared_task
-def add_numbers(x, y):
-    """
-    Celery task that adds two numbers in the background.
-    
-    Args:
-        x: First number
-        y: Second number
-    
-    Returns:
-        Sum of x and y
-    """
-    result = x + y
-    print(f"Adding {x} + {y} = {result}")
-    return result
-
-
-@shared_task
 def process_product_file(file_path):
     """
     Process uploaded CSV file and import products in chunks.
@@ -244,7 +226,6 @@ def process_product_file(file_path):
     Returns:
         dict: Processing results with success count, error count, and errors
     """
-    print('Task queued')
     success_count = 0
     chunksize = 100  # Read and process CSV in chunks of 100 rows
     
