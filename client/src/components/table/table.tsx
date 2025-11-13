@@ -148,6 +148,7 @@ const Table = <TData extends Record<string, any>>({
 		
 		mantineLoadingOverlayProps: {
 			loader: <Loader2 className="animate-spin" />,
+			zIndex: 5
 		},
 		renderEmptyRowsFallback: (props) => {
 			return <div className="m-auto">No records found</div>

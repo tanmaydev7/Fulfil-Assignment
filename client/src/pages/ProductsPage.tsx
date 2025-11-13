@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { ProductUploadDialog } from "../components/ProductUploadDialog";
-import { Upload, RefreshCw } from "lucide-react";
+import { AddProductDialog } from "../components/AddProductDialog";
+import { EditProductDialog } from "../components/EditProductDialog";
+import { Upload, RefreshCw, Plus, Pencil } from "lucide-react";
 import axios from "axios";
 import { Table, TruncatedCell } from "@/src/components/table/table";
 import type { MRT_ColumnDef } from "mantine-react-table";
@@ -9,6 +11,7 @@ import type { MRT_ColumnDef } from "mantine-react-table";
 const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
 interface Product {
+  id: number;
   sku: string;
   name: string;
   description: string;
@@ -26,6 +29,9 @@ interface ProductsResponse {
 
 export default function ProductsPage() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [addProductDialogOpen, setAddProductDialogOpen] = useState(false);
+  const [editProductDialogOpen, setEditProductDialogOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +122,25 @@ export default function ProductsPage() {
           return <span className="text-muted-foreground">{new Date(date).toLocaleDateString()}</span>;
         },
       },
+      {
+        id: "actions",
+        header: "Actions",
+        size: 100,
+        Cell: ({ row }) => {
+          const product = row.original;
+          return (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleEditProduct(product)}
+              className="h-8 w-8 p-0"
+              aria-label="Edit product"
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+          );
+        },
+      },
     ],
     []
   );
@@ -127,6 +152,11 @@ export default function ProductsPage() {
   const handlePageSizeChange = (newPageSize: number) => {
     setLimit(newPageSize);
     setOffset(0);
+  };
+
+  const handleEditProduct = (product: Product) => {
+    setSelectedProduct(product);
+    setEditProductDialogOpen(true);
   };
 
   return (
@@ -142,6 +172,10 @@ export default function ProductsPage() {
           <Button variant="outline" onClick={fetchProducts} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
             Refresh
+          </Button>
+          <Button onClick={() => setAddProductDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            Add Product
           </Button>
           <Button onClick={() => setUploadDialogOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
@@ -184,12 +218,27 @@ export default function ProductsPage() {
                 flexDirection: "column",
                 flex: 1,
                 minHeight: 0,
+                border: 'none !important'
               },
             }}
-            mantineTableContainerProps={{ sx: { flex: 1 } }}
+            mantineTableContainerProps={{ sx: { flex: 1 , border: 'none !important'} }}
+            
           />
         )}
       </div>
+
+      <AddProductDialog
+        open={addProductDialogOpen}
+        onOpenChange={setAddProductDialogOpen}
+        onSuccess={fetchProducts}
+      />
+
+      <EditProductDialog
+        open={editProductDialogOpen}
+        onOpenChange={setEditProductDialogOpen}
+        product={selectedProduct}
+        onSuccess={fetchProducts}
+      />
 
       <ProductUploadDialog
         open={uploadDialogOpen}

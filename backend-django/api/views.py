@@ -309,8 +309,8 @@ class ProductListView(APIView):
             # Get total count (optimized single query)
             total_count = Product.objects.count()
             
-            # Get paginated products (optimized query with limit)
-            products = Product.objects.all()[offset:offset + limit]
+            # Get paginated products ordered by updated_at descending (newest first)
+            products = Product.objects.all().order_by('-updated_at')[offset:offset + limit]
             
             # Serialize products
             serializer = ProductSerializer(products, many=True)
@@ -321,6 +321,138 @@ class ProductListView(APIView):
                 'offset': offset,
                 'results': serializer.data
             })
+        
+        except Exception as e:
+            return generate_error_response(
+                str(e),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ProductEditView(APIView):
+    """
+    API view to create and update products.
+    POST: Create a new product
+    PATCH: Update an existing product by SKU
+    """
+    
+    def post(self, request):
+        """
+        Create a new product.
+        
+        Request body:
+        {
+            "sku": "PROD-001",
+            "name": "Product Name",
+            "description": "Product description"
+        }
+        
+        Returns:
+        {
+            "message": {
+                "sku": "PROD-001",
+                "name": "Product Name",
+                "description": "Product description",
+                "status": "active",
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z"
+            }
+        }
+        """
+        try:
+            # Create a copy of request data and ensure status is set to active
+            product_data = request.data.copy()
+            product_data['status'] = 'active'
+            
+            serializer = ProductSerializer(data=product_data)
+            
+            if serializer.is_valid():
+                # Save product with active status
+                product = serializer.save()
+                return generate_successful_response(
+                    ProductSerializer(product).data,
+                    status=status.HTTP_201_CREATED
+                )
+            else:
+                return generate_error_response(
+                    serializer.errors,
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        except Exception as e:
+            return generate_error_response(
+                str(e),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def patch(self, request):
+        """
+        Update an existing product by ID.
+        
+        Request body:
+        {
+            "id": 1,  # Product ID to identify the product (required)
+            "sku": "PROD-001",  # Optional: can be updated
+            "name": "Updated Product Name",
+            "description": "Updated description",
+            "status": "active" or "inactive"
+        }
+        
+        Note: 
+        - "id" is required in the payload to identify the product to update.
+        - SKU can be updated but must remain unique.
+        - All other fields are optional.
+        
+        Returns:
+        {
+            "message": {
+                "id": 1,
+                "sku": "PROD-001",
+                "name": "Updated Product Name",
+                "description": "Updated description",
+                "status": "active",
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z"
+            }
+        }
+        """
+        try:
+            # Get ID from request data to identify the product
+            product_id = request.data.get('id')
+            
+            if not product_id:
+                return generate_error_response(
+                    "id is required in request body to identify the product",
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get the product
+            try:
+                product = Product.objects.get(id=product_id)
+            except Product.DoesNotExist:
+                return generate_error_response(
+                    f"Product with id '{product_id}' not found",
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Update product with partial data (id is read-only, so exclude it from update)
+            update_data = request.data.copy()
+            # Remove id from update data as it's the primary key and shouldn't be changed
+            update_data.pop('id', None)
+            
+            serializer = ProductSerializer(product, data=update_data, partial=True)
+            
+            if serializer.is_valid():
+                updated_product = serializer.save()
+                return generate_successful_response(
+                    ProductSerializer(updated_product).data,
+                    status=status.HTTP_200_OK
+                )
+            else:
+                return generate_error_response(
+                    serializer.errors,
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         except Exception as e:
             return generate_error_response(
