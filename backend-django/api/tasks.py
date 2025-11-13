@@ -4,7 +4,7 @@ Celery tasks for the api app.
 from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
-from .models import Product
+from .models import Product, Webhook
 import pandas as pd
 import os
 from django.db import transaction
@@ -36,13 +36,138 @@ def bulk_delete_products(product_ids):
                 except Exception as e:
                     errors.append(f"Error deleting product {product_id}: {str(e)}")
         
-        return {
+        result = {
             "deleted": deleted_count,
             "total": len(product_ids),
             "errors": errors if errors else None
         }
+        
+        # Trigger webhook for product.bulk_deleted after async deletion completes
+        from .utils import trigger_webhooks
+        trigger_webhooks('product.bulk_deleted', {
+            "deleted": deleted_count,
+            "total": len(product_ids),
+            "ids": product_ids
+        })
+        
+        return result
     except Exception as e:
         raise ValueError(f"Bulk delete failed: {str(e)}")
+
+
+@shared_task
+def send_webhook(webhook_id, event_type, payload):
+    """
+    Celery task to send webhook request asynchronously.
+    
+    Args:
+        webhook_id: ID of the webhook configuration
+        event_type: Type of event that triggered the webhook
+        payload: Data payload to send
+    
+    Returns:
+        dict: Response details with status code, response time, and any errors
+    """
+    import requests
+    import time
+    from django.utils import timezone
+    
+    try:
+        webhook = Webhook.objects.get(id=webhook_id, enabled=True)
+    except Webhook.DoesNotExist:
+        return {
+            "success": False,
+            "error": f"Webhook {webhook_id} not found or disabled"
+        }
+    
+    # Prepare request data
+    request_headers = {
+        'Content-Type': 'application/json',
+        'X-Webhook-Event': event_type,
+        'User-Agent': 'Django-Webhook-Client/1.0',
+    }
+    
+    # Add custom headers
+    if webhook.headers:
+        request_headers.update(webhook.headers)
+    
+    # Add signature if secret is provided
+    if webhook.secret:
+        import hmac
+        import hashlib
+        import json
+        payload_str = json.dumps(payload, sort_keys=True)
+        signature = hmac.new(
+            webhook.secret.encode('utf-8'),
+            payload_str.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        request_headers['X-Webhook-Signature'] = f'sha256={signature}'
+    
+    # Prepare full payload
+    full_payload = {
+        'event': event_type,
+        'timestamp': timezone.now().isoformat(),
+        'data': payload
+    }
+    
+    # Send request with retries
+    response_code = None
+    response_time = None
+    error_message = None
+    
+    for attempt in range(webhook.retry_count):
+        try:
+            start_time = time.time()
+            response = requests.post(
+                webhook.url,
+                json=full_payload,
+                headers=request_headers,
+                timeout=webhook.timeout
+            )
+            response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+            response_code = response.status_code
+            
+            # Update webhook with last trigger info
+            webhook.last_triggered_at = timezone.now()
+            webhook.last_response_code = response_code
+            webhook.last_response_time = response_time
+            webhook.save(update_fields=['last_triggered_at', 'last_response_code', 'last_response_time'])
+            
+            if response.status_code < 400:
+                return {
+                    "success": True,
+                    "status_code": response_code,
+                    "response_time_ms": response_time,
+                    "attempt": attempt + 1
+                }
+            else:
+                error_message = f"HTTP {response.status_code}: {response.text[:200]}"
+                
+        except requests.exceptions.Timeout:
+            error_message = f"Request timeout after {webhook.timeout}s"
+        except requests.exceptions.ConnectionError:
+            error_message = "Connection error - unable to reach webhook URL"
+        except Exception as e:
+            error_message = f"Unexpected error: {str(e)}"
+        
+        # If not last attempt, wait before retry
+        if attempt < webhook.retry_count - 1:
+            time.sleep(2 ** attempt)  # Exponential backoff
+    
+    # All retries failed
+    webhook.last_triggered_at = timezone.now()
+    webhook.last_response_code = response_code or 0
+    webhook.last_response_time = response_time
+    webhook.save(update_fields=['last_triggered_at', 'last_response_code', 'last_response_time'])
+    
+    return {
+        "success": False,
+        "status_code": response_code,
+        "response_time_ms": response_time,
+        "error": error_message,
+        "attempts": webhook.retry_count
+    }
 
 
 @shared_task

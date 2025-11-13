@@ -1,5 +1,7 @@
 from rest_framework.response import Response
 from rest_framework import status
+from .models import Webhook
+from .tasks import send_webhook
 from django.http import HttpResponseRedirect
 import os
 import uuid
@@ -141,5 +143,38 @@ def validate_csv_file(file_path):
     except Exception as e:
         print(f"CSV validation error: {e}")
         return False
+
+
+def trigger_webhooks(event_type, payload):
+    """
+    Trigger webhooks for a given event type.
+    
+    Args:
+        event_type: The event type (e.g., 'product.created', 'product.updated')
+        payload: The payload data to send to webhooks
+    
+    Returns:
+        Number of webhooks triggered
+    """
+    try:
+        # Get all enabled webhooks
+        all_webhooks = Webhook.objects.filter(enabled=True)
+        
+        # Filter webhooks that subscribe to this event type
+        # JSONField contains check - event_type must be in the event_types array
+        webhooks = [
+            webhook for webhook in all_webhooks
+            if event_type in (webhook.event_types or [])
+        ]
+        
+        # Trigger each webhook asynchronously
+        for webhook in webhooks:
+            send_webhook.delay(webhook.id, event_type, payload)
+        
+        return len(webhooks)
+    except Exception as e:
+        # Don't fail the main operation if webhook triggering fails
+        print(f"Error triggering webhooks: {e}")
+        return 0
 
 
