@@ -19,9 +19,9 @@ export default defineConfig({
 		main: "./src/main.tsx"
 	},
 	output: {
-    filename: 'bundle.js',
-    publicPath: '/', // ✅ Important for React Router
-  },
+		filename: 'bundle.js',
+		publicPath: '/', // ✅ Important for React Router
+	},
 	resolve: {
 		extensions: ["...", ".ts", ".tsx", ".jsx"],
 		alias: {
@@ -73,9 +73,7 @@ export default defineConfig({
 			template: "./index.html"
 		}),
 		isDev ? new ReactRefreshRspackPlugin() : null,
-		new DotenvWebpackPlugin({
-			path: '../.env', // Path to .env file (this is the default)
-		})
+		new DotenvWebpackPlugin()
 	],
 	optimization: {
 		minimizer: [
