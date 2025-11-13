@@ -42,7 +42,6 @@ def process_product_file(file_path):
     """
     print('Task queued')
     success_count = 0
-    errors = []
     chunksize = 100  # Read and process CSV in chunks of 100 rows
     
     try:
@@ -51,12 +50,8 @@ def process_product_file(file_path):
         if not column_validation['valid']:
             if os.path.exists(file_path):
                 os.remove(file_path)
-            return {
-                'success': False,
-                'error': column_validation['error'],
-                'error_count': 0,
-                'errors': []
-            }
+            # Raise exception so Celery marks task as FAILURE
+            raise ValueError(column_validation['error'])
         
         # Process CSV in chunks using transaction
         # If any write fails, the entire transaction will rollback
@@ -131,12 +126,8 @@ def process_product_file(file_path):
             except:
                 pass
         
-        return {
-            'success': False,
-            'error': str(e),
-            'success_count': success_count,
-            'error_count': 0,
-        }
+        # Re-raise the exception so Celery marks the task as FAILURE
+        raise
 
 
 def _validate_csv_columns(file_path):

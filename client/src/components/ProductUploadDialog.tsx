@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Upload, FileText, Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import axios from "axios";
 
-const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+const CHUNK_SIZE = 4 * 1024 * 1024; // 1MB chunks
 const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
 type UploadStep = "upload" | "processing" | "success" | "error";

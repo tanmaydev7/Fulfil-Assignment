@@ -138,6 +138,14 @@ class ProductUploadView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Validate file chunk size (max 5MB)
+            MAX_CHUNK_SIZE = 5 * 1024 * 1024  # 5MB in bytes
+            if file.size > MAX_CHUNK_SIZE:
+                return generate_error_response(
+                    f"File chunk size ({file.size / (1024 * 1024):.2f} MB) exceeds maximum allowed size of 5 MB",
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             # Ensure media directory exists
             media_root = settings.MEDIA_ROOT
             uploads_dir = os.path.join(media_root, 'uploads')
@@ -194,21 +202,40 @@ class TaskStatusView(APIView):
                 if task_result.successful():
                     result_data["result"] = task_result.result
                 else:
-                    # Task failed
-                    result_data["error"] = str(task_result.info) if task_result.info else "Task failed"
+                    # Task failed - extract error message
+                    error_message = "Task failed"
+                    if task_result.info:
+                        # If info is an exception, get its message
+                        if isinstance(task_result.info, Exception):
+                            error_message = str(task_result.info)
+                        else:
+                            error_message = str(task_result.info)
+                    
+                    result_data["error"] = error_message
+                    
                     # Try to get more details from database if available
                     try:
                         db_result = TaskResult.objects.filter(task_id=task_id).first()
-                        if db_result and db_result.traceback:
-                            result_data["error"] = db_result.traceback
-                        elif db_result and db_result.result:
-                            try:
-                                import json
-                                error_info = json.loads(db_result.result) if isinstance(db_result.result, str) else db_result.result
-                                if isinstance(error_info, dict) and "error" in error_info:
-                                    result_data["error"] = error_info.get("error", result_data["error"])
-                            except:
-                                pass
+                        if db_result:
+                            # Prefer traceback if available (more detailed)
+                            if db_result.traceback:
+                                # Extract just the error message from traceback (last line usually has the error)
+                                traceback_lines = db_result.traceback.split('\n')
+                                if traceback_lines:
+                                    # Get the last meaningful line (usually the exception message)
+                                    for line in reversed(traceback_lines):
+                                        if line.strip() and not line.strip().startswith('File'):
+                                            error_message = line.strip()
+                                            break
+                                result_data["error"] = error_message
+                            elif db_result.result:
+                                try:
+                                    import json
+                                    error_info = json.loads(db_result.result) if isinstance(db_result.result, str) else db_result.result
+                                    if isinstance(error_info, dict) and "error" in error_info:
+                                        result_data["error"] = error_info.get("error", error_message)
+                                except:
+                                    pass
                     except:
                         pass
             else:
