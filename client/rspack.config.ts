@@ -79,6 +79,16 @@ export default defineConfig({
 			systemvars: true, // Use system environment variables (important for Vercel)
 			silent: true, // Don't warn if .env file is missing
 		}),
+		// Copy public folder to dist
+		new rspack.CopyRspackPlugin({
+			patterns: [
+				{
+					from: path.resolve(__dirname, 'public'),
+					to: '.', // Copy to output directory root (dist)
+					noErrorOnMissing: true, // Don't error if public folder doesn't exist
+				},
+			],
+		}),
 	].filter(Boolean),
 	optimization: {
 		minimizer: [
