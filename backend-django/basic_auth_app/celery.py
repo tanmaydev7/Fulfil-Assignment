@@ -17,6 +17,7 @@ app = Celery('basic_auth_app')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Load task modules from all registered Django apps.
+# This will automatically discover tasks from all INSTALLED_APPS
 app.autodiscover_tasks()
 
 
