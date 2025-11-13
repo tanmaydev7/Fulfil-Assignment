@@ -6,8 +6,9 @@ import os
 from celery.result import AsyncResult
 from basic_auth_app.celery import app as celery_app
 from django_celery_results.models import TaskResult
+from .models import Product
 from .tasks import add_numbers
-from .serializers import AddNumbersSerializer
+from .serializers import AddNumbersSerializer, ProductSerializer
 from .utils import (
     generate_successful_response, 
     generate_error_response,
@@ -255,6 +256,71 @@ class TaskStatusView(APIView):
                     pass
             
             return generate_successful_response(result_data)
+        
+        except Exception as e:
+            return generate_error_response(
+                str(e),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ProductListView(APIView):
+    """
+    API view to get paginated list of products.
+    """
+    
+    def get(self, request):
+        """
+        Get paginated list of products.
+        
+        Query parameters:
+        - limit: Number of products to return (default: 100, max: 1000)
+        - offset: Number of products to skip (default: 0)
+        
+        Returns:
+        {
+            "message": {
+                "count": 1000,
+                "limit": 100,
+                "offset": 0,
+                "results": [...]
+            }
+        }
+        """
+        try:
+            # Get and validate limit
+            limit = int(request.query_params.get('limit', 100))
+            
+            if limit > 1000:
+                return generate_error_response(
+                    "Limit can't be greater than 1000",
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get and validate offset
+            offset = request.query_params.get('offset', 0)
+            try:
+                offset = int(offset)
+                if offset < 0:
+                    offset = 0
+            except (ValueError, TypeError):
+                offset = 0
+            
+            # Get total count (optimized single query)
+            total_count = Product.objects.count()
+            
+            # Get paginated products (optimized query with limit)
+            products = Product.objects.all()[offset:offset + limit]
+            
+            # Serialize products
+            serializer = ProductSerializer(products, many=True)
+            
+            return generate_successful_response({
+                'count': total_count,
+                'limit': limit,
+                'offset': offset,
+                'results': serializer.data
+            })
         
         except Exception as e:
             return generate_error_response(
