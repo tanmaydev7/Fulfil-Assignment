@@ -147,34 +147,23 @@ def validate_csv_file(file_path):
 
 def trigger_webhooks(event_type, payload):
     """
-    Trigger webhooks for a given event type.
+    Trigger webhooks for a given event type asynchronously.
+    This function schedules a background task to fetch webhooks and trigger them,
+    avoiding database queries in the main API request path.
     
     Args:
         event_type: The event type (e.g., 'product.created', 'product.updated')
         payload: The payload data to send to webhooks
     
     Returns:
-        Number of webhooks triggered
+        None (task is queued asynchronously)
     """
     try:
-        # Get all enabled webhooks
-        all_webhooks = Webhook.objects.filter(enabled=True)
-        
-        # Filter webhooks that subscribe to this event type
-        # JSONField contains check - event_type must be in the event_types array
-        webhooks = [
-            webhook for webhook in all_webhooks
-            if event_type in (webhook.event_types or [])
-        ]
-        
-        # Trigger each webhook asynchronously
-        for webhook in webhooks:
-            send_webhook.delay(webhook.id, event_type, payload)
-        
-        return len(webhooks)
+        from .tasks import trigger_webhooks_task
+        # Schedule the webhook triggering as a background task
+        trigger_webhooks_task.apply_async(args=[event_type, payload])
     except Exception as e:
         # Don't fail the main operation if webhook triggering fails
-        print(f"Error triggering webhooks: {e}")
-        return 0
+        print(f"Error queuing webhook trigger task: {e}")
 
 

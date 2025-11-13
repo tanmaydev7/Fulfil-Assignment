@@ -8,7 +8,7 @@ from celery.result import AsyncResult
 from basic_auth_app.celery import app as celery_app
 from django_celery_results.models import TaskResult
 from .models import Product, Webhook
-from .tasks import add_numbers, bulk_delete_products, send_webhook
+from .tasks import add_numbers, bulk_delete_products, send_webhook, trigger_webhooks_task
 from .serializers import AddNumbersSerializer, ProductSerializer, WebhookSerializer
 from .utils import (
     generate_successful_response, 

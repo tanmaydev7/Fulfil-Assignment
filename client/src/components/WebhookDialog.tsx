@@ -51,6 +51,7 @@ const EVENT_TYPES = [
   { value: 'product.deleted', label: 'Product Deleted' },
   { value: 'product.bulk_updated', label: 'Product Bulk Updated' },
   { value: 'product.bulk_deleted', label: 'Product Bulk Deleted' },
+  { value: 'product.uploaded', label: 'Product Uploaded' },
 ];
 
 export const WebhookDialog = ({ open, onOpenChange, webhook, onSuccess }: WebhookDialogProps) => {

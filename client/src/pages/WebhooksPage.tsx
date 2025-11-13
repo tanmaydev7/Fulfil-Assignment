@@ -465,6 +465,7 @@ export default function WebhooksPage() {
               },
             }}
             mantineTableContainerProps={{ sx: { flex: 1, border: 'none !important' } }}
+            key={webhooks.length}
           />
         )}
       </div>
