@@ -575,7 +575,7 @@ export default function ProductsPage() {
   }, [deleteTaskId, bulkDeleteConfirmOpen, limit, offset, filters]);
 
   return (
-    <div className="container mx-auto p-6 h-screen max-h-screen flex flex-col overflow-hidden">
+    <div className="container mx-auto p-6 h-full flex flex-col overflow-hidden">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Products</h1>
