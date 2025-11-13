@@ -11,6 +11,41 @@ from django.db import transaction
 
 
 @shared_task
+def bulk_delete_products(product_ids):
+    """
+    Celery task to delete multiple products in the background.
+    
+    Args:
+        product_ids: List of product IDs to delete
+    
+    Returns:
+        dict: Results with deleted count and any errors
+    """
+    deleted_count = 0
+    errors = []
+    
+    try:
+        with transaction.atomic():
+            for product_id in product_ids:
+                try:
+                    product = Product.objects.get(id=product_id)
+                    product.delete()
+                    deleted_count += 1
+                except Product.DoesNotExist:
+                    errors.append(f"Product with id '{product_id}' not found")
+                except Exception as e:
+                    errors.append(f"Error deleting product {product_id}: {str(e)}")
+        
+        return {
+            "deleted": deleted_count,
+            "total": len(product_ids),
+            "errors": errors if errors else None
+        }
+    except Exception as e:
+        raise ValueError(f"Bulk delete failed: {str(e)}")
+
+
+@shared_task
 def add_numbers(x, y):
     """
     Celery task that adds two numbers in the background.

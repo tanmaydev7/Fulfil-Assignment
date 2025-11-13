@@ -7,7 +7,7 @@ from celery.result import AsyncResult
 from basic_auth_app.celery import app as celery_app
 from django_celery_results.models import TaskResult
 from .models import Product
-from .tasks import add_numbers
+from .tasks import add_numbers, bulk_delete_products
 from .serializers import AddNumbersSerializer, ProductSerializer
 from .utils import (
     generate_successful_response, 
@@ -554,50 +554,194 @@ class ProductEditView(APIView):
     
     def delete(self, request):
         """
-        Delete a product by ID.
+        Delete product(s) - supports single, bulk, and delete all.
         
-        Request body:
+        Single delete request body:
         {
             "id": 1  # Product ID to delete (required)
         }
         
+        Bulk delete request body:
+        {
+            "ids": [1, 2, 3, ...]  # List of product IDs to delete (required)
+        }
+        
+        Delete all request body:
+        {
+            "delete_all": true  # Deletes all products in database
+        }
+        
+        Note:
+        - If count < 100: Processes synchronously (immediate response)
+        - If count >= 100: Processes asynchronously (returns task_id for status tracking)
+        - delete_all always processes asynchronously if >= 100 products exist
+        
         Returns:
+        Single delete:
         {
             "message": {
                 "id": 1,
                 "message": "Product deleted successfully"
             }
         }
+        
+        Bulk delete (sync, < 100):
+        {
+            "message": {
+                "deleted": 5,
+                "total": 5,
+                "errors": null
+            }
+        }
+        
+        Bulk delete (async, >= 100) or delete_all:
+        {
+            "message": {
+                "task_id": "task-uuid",
+                "status": "PENDING",
+                "message": "Bulk delete task queued successfully",
+                "total": 150
+            }
+        }
         """
         try:
-            # Get ID from request data
-            product_id = request.data.get('id')
+            from django.db import transaction
             
-            if not product_id:
+            # Check if this is delete all
+            delete_all = request.data.get('delete_all', False)
+            
+            if delete_all:
+                # Delete all products
+                total_count = Product.objects.count()
+                
+                if total_count == 0:
+                    return generate_error_response(
+                        "No products to delete",
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Get all product IDs
+                all_product_ids = list(Product.objects.values_list('id', flat=True))
+                
+                # Conditional processing: sync if < 100, async if >= 100
+                if total_count < 100:
+                    # Synchronous processing
+                    deleted_count = 0
+                    errors = []
+                    
+                    with transaction.atomic():
+                        for product_id in all_product_ids:
+                            try:
+                                product = Product.objects.get(id=product_id)
+                                product.delete()
+                                deleted_count += 1
+                            except Product.DoesNotExist:
+                                errors.append(f"Product with id '{product_id}' not found")
+                            except Exception as e:
+                                errors.append(f"Error deleting product {product_id}: {str(e)}")
+                    
+                    return generate_successful_response({
+                        "deleted": deleted_count,
+                        "total": total_count,
+                        "errors": errors if errors else None
+                    })
+                
+                else:
+                    # Asynchronous processing
+                    task = bulk_delete_products.apply_async([all_product_ids])
+                    
+                    return generate_successful_response(
+                        {
+                            "task_id": task.id,
+                            "status": "PENDING",
+                            "message": f"Bulk delete task for {total_count} products queued successfully",
+                            "total": total_count
+                        },
+                        status=status.HTTP_202_ACCEPTED
+                    )
+            
+            # Check if this is bulk delete
+            product_ids = request.data.get('ids')
+            single_id = request.data.get('id')
+            
+            if product_ids:
+                # Bulk delete selected
+                if not isinstance(product_ids, list):
+                    return generate_error_response(
+                        "ids must be an array",
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                if len(product_ids) == 0:
+                    return generate_error_response(
+                        "ids array cannot be empty",
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                total_count = len(product_ids)
+                
+                # Conditional processing: sync if < 100, async if >= 100
+                if total_count < 100:
+                    # Synchronous processing
+                    deleted_count = 0
+                    errors = []
+                    
+                    with transaction.atomic():
+                        for product_id in product_ids:
+                            try:
+                                product = Product.objects.get(id=product_id)
+                                product.delete()
+                                deleted_count += 1
+                            except Product.DoesNotExist:
+                                errors.append(f"Product with id '{product_id}' not found")
+                            except Exception as e:
+                                errors.append(f"Error deleting product {product_id}: {str(e)}")
+                    
+                    return generate_successful_response({
+                        "deleted": deleted_count,
+                        "total": total_count,
+                        "errors": errors if errors else None
+                    })
+                
+                else:
+                    # Asynchronous processing
+                    task = bulk_delete_products.apply_async([product_ids])
+                    
+                    return generate_successful_response(
+                        {
+                            "task_id": task.id,
+                            "status": "PENDING",
+                            "message": f"Bulk delete task for {total_count} products queued successfully",
+                            "total": total_count
+                        },
+                        status=status.HTTP_202_ACCEPTED
+                    )
+            
+            elif single_id:
+                # Single delete (backward compatibility)
+                try:
+                    product = Product.objects.get(id=single_id)
+                except Product.DoesNotExist:
+                    return generate_error_response(
+                        f"Product with id '{single_id}' not found",
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                product.delete()
+                
+                return generate_successful_response(
+                    {
+                        "id": single_id,
+                        "message": "Product deleted successfully"
+                    },
+                    status=status.HTTP_200_OK
+                )
+            
+            else:
                 return generate_error_response(
-                    "id is required in request body to identify the product to delete",
+                    "Either 'id', 'ids', or 'delete_all' is required in request body",
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            # Get the product
-            try:
-                product = Product.objects.get(id=product_id)
-            except Product.DoesNotExist:
-                return generate_error_response(
-                    f"Product with id '{product_id}' not found",
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            # Delete the product
-            product.delete()
-            
-            return generate_successful_response(
-                {
-                    "id": product_id,
-                    "message": "Product deleted successfully"
-                },
-                status=status.HTTP_200_OK
-            )
         
         except Exception as e:
             return generate_error_response(
