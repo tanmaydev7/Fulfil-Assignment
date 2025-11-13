@@ -11,7 +11,7 @@ import {
 import { ProductUploadDialog } from "../components/ProductUploadDialog";
 import { AddProductDialog } from "../components/AddProductDialog";
 import { EditProductDialog } from "../components/EditProductDialog";
-import { Upload, RefreshCw, Plus, Pencil, Save, X, Trash2, AlertCircle, Loader2 } from "lucide-react";
+import { Upload, RefreshCw, Plus, Pencil, Save, X, Trash2, AlertCircle, Loader2, FileX } from "lucide-react";
 import axios from "axios";
 import { Table, TruncatedCell } from "@/src/components/table/table";
 import type { MRT_ColumnDef, MRT_Row } from "mantine-react-table";
@@ -22,6 +22,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
@@ -47,9 +53,14 @@ export default function ProductsPage() {
   const [addProductDialogOpen, setAddProductDialogOpen] = useState(false);
   const [editProductDialogOpen, setEditProductDialogOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [selectedRowIds, setSelectedRowIds] = useState<number[]>([]);
+  const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null);
+  const [deleteProcessingStatus, setDeleteProcessingStatus] = useState<string>("");
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +98,8 @@ export default function ProductsPage() {
 
   useEffect(() => {
     fetchProducts();
+    // Clear selection when page changes
+    setSelectedRowIds([]);
   }, [limit, offset]);
 
   const currentPage = Math.floor(offset / limit);
@@ -411,6 +424,123 @@ export default function ProductsPage() {
     }
   };
 
+  const handleBulkDeleteClick = (deleteAll: boolean) => {
+    if (deleteAll) {
+      // Delete all products in database - will send delete_all: true
+      setSelectedRowIds([]); // Clear selection for delete all
+    } else {
+      // Delete selected rows
+      if (selectedRowIds.length === 0) {
+        setError("Please select at least one product to delete");
+        return;
+      }
+    }
+    setBulkDeleteConfirmOpen(true);
+  };
+
+  const handleBulkDeleteConfirm = async () => {
+    const isDeleteAll = selectedRowIds.length === 0;
+
+    setBulkDeleting(true);
+    setError(null);
+    setDeleteProcessingStatus("");
+
+    try {
+      const requestData = isDeleteAll 
+        ? { delete_all: true }
+        : { ids: selectedRowIds };
+
+      const response = await axios.delete(
+        `${API_BASE_URL}/api/products/edit/`,
+        { data: requestData }
+      );
+
+      const result = response.data.message;
+
+      // Check if async (has task_id) or sync
+      if (result.task_id) {
+        // Async processing (>= 100 rows)
+        setDeleteTaskId(result.task_id);
+        setDeleteProcessingStatus(`Processing ${result.total} products in background...`);
+        // Don't close dialog yet, wait for task completion
+      } else {
+        // Sync processing (< 100 rows)
+        setBulkDeleteConfirmOpen(false);
+        setSelectedRowIds([]);
+        await fetchProducts();
+      }
+    } catch (err: any) {
+      const errorMessage =
+        typeof err.response?.data?.message === 'string'
+          ? err.response?.data?.message
+          : err.response?.data?.message?.errors?.join(' ') || err.message || "Failed to delete products";
+      setError(errorMessage);
+      setBulkDeleting(false);
+    }
+  };
+
+  // Poll task status for async bulk delete
+  useEffect(() => {
+    if (deleteTaskId && bulkDeleteConfirmOpen) {
+      let pollCount = 0;
+      const maxPolls = 300; // Max 10 minutes
+      
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        
+        if (pollCount > maxPolls) {
+          setError("Processing took too long. Please check the server logs.");
+          setBulkDeleting(false);
+          clearInterval(pollInterval);
+          return;
+        }
+        
+        try {
+          const response = await axios.get(
+            `${API_BASE_URL}/api/tasks/${deleteTaskId}/status/`
+          );
+          const taskData = response.data.message;
+
+          if (taskData.state === "SUCCESS") {
+            setDeleteProcessingStatus("Deletion completed successfully!");
+            setBulkDeleting(false);
+            clearInterval(pollInterval);
+            // Close dialog and refresh after a short delay
+            setTimeout(async () => {
+              setBulkDeleteConfirmOpen(false);
+              setDeleteTaskId(null);
+              setSelectedRowIds([]);
+              await fetchProducts();
+            }, 1500);
+          } else if (taskData.state === "FAILURE") {
+            const errorMsg = taskData.error || taskData.result?.error || "Deletion failed";
+            setError(errorMsg);
+            setBulkDeleting(false);
+            clearInterval(pollInterval);
+          } else {
+            const statusMessages: Record<string, string> = {
+              PENDING: "Waiting to start...",
+              STARTED: "Deleting products in progress...",
+              RETRY: "Retrying...",
+            };
+            setDeleteProcessingStatus(
+              statusMessages[taskData.state] || `Processing... (${taskData.state})`
+            );
+          }
+        } catch (err: any) {
+          console.error("Error polling task status:", err);
+          if (pollCount > 10) {
+            setError("Unable to check task status. Please try again later.");
+            setBulkDeleting(false);
+            clearInterval(pollInterval);
+          }
+        }
+      }, 2000); // Poll every 2 seconds
+
+      return () => clearInterval(pollInterval);
+    }
+  }, [deleteTaskId, bulkDeleteConfirmOpen]);
+
   return (
     <div className="container mx-auto p-6 h-screen max-h-screen flex flex-col overflow-hidden">
       <div className="flex items-center justify-between mb-6">
@@ -420,47 +550,120 @@ export default function ProductsPage() {
             Manage your product inventory
           </p>
         </div>
+        <TooltipProvider>
         <div className="flex gap-2">
-          <Button
-            variant={inlineEditMode ? "default" : "outline"}
-            onClick={handleToggleInlineEdit}
-            className={inlineEditMode ? "bg-blue-600 hover:bg-blue-700" : ""}
-          >
-            <Pencil className="h-4 w-4 mr-2" />
-            {inlineEditMode ? "Exit Edit Mode" : "Inline Edit"}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={inlineEditMode ? "default" : "outline"}
+                  size="icon"
+                  onClick={handleToggleInlineEdit}
+                  className={inlineEditMode ? "bg-blue-600 hover:bg-blue-700" : ""}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {inlineEditMode ? "Exit Edit Mode" : "Inline Edit"}
+              </TooltipContent>
+            </Tooltip>
+            {inlineEditMode && editedProducts.size > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    onClick={handleSaveAll}
+                    disabled={saving}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    {saving ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="h-4 w-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {saving ? "Saving..." : `Save Data (${editedProducts.size})`}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button 
+                  variant="outline" 
+                  size="icon"
+                  onClick={fetchProducts} 
+                  disabled={loading || saving}
+                >
+                  <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button 
+                  size="icon"
+                  onClick={() => setAddProductDialogOpen(true)} 
+                  disabled={saving}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Add Product</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button 
+                  size="icon"
+                  variant="outline"
+                  onClick={() => setUploadDialogOpen(true)} 
+                  disabled={saving}
+                >
+                  <Upload className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Upload CSV</TooltipContent>
+            </Tooltip>
+            {selectedRowIds.length > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    onClick={() => handleBulkDeleteClick(false)}
+                    disabled={saving || bulkDeleting}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    <Trash2 className="h-4 w-4" />
           </Button>
-          {inlineEditMode && editedProducts.size > 0 && (
-            <Button
-              onClick={handleSaveAll}
-              disabled={saving}
-              className="bg-green-600 hover:bg-green-700"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save className="h-4 w-4 mr-2" />
-                  Save Data ({editedProducts.size})
-                </>
-              )}
-            </Button>
-          )}
-          <Button variant="outline" onClick={fetchProducts} disabled={loading || saving}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-            Refresh
+                </TooltipTrigger>
+                <TooltipContent>
+                  Delete Selected ({selectedRowIds.length})
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {totalCount > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    onClick={() => handleBulkDeleteClick(true)}
+                    disabled={saving || bulkDeleting || loading}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    <FileX className="h-4 w-4" />
           </Button>
-          <Button onClick={() => setAddProductDialogOpen(true)} disabled={saving}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Product
-          </Button>
-          <Button onClick={() => setUploadDialogOpen(true)} disabled={saving}>
-            <Upload className="h-4 w-4 mr-2" />
-            Upload CSV
-          </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Delete All ({totalCount})
+                </TooltipContent>
+              </Tooltip>
+            )}
         </div>
+        </TooltipProvider>
       </div>
 
       {/* Products Table */}
@@ -479,11 +682,23 @@ export default function ProductsPage() {
             state={{
               isLoading: loading,
               density: 'xs',
+              rowSelection: Object.fromEntries(selectedRowIds.map(id => [id.toString(), true])),
             }}
             enableFilters={false}
             enableSorting={false}
             enableColumnResizing={true}
             enableColumnActions={false}
+            enableRowSelection={true}
+            onRowSelectionChange={(updater) => {
+              if (typeof updater === 'function') {
+                const newSelection = updater(Object.fromEntries(selectedRowIds.map(id => [id.toString(), true])));
+                const selectedIds = Object.keys(newSelection)
+                  .filter(key => newSelection[key])
+                  .map(key => parseInt(key));
+                setSelectedRowIds(selectedIds);
+              }
+            }}
+            getRowId={(row) => (row.id ?? '').toString()}
             pagination={{
               pageIndex: currentPage,
               pageSize: pageSize,
@@ -589,6 +804,113 @@ export default function ProductsPage() {
                 <>
                   <Trash2 className="h-4 w-4 mr-2" />
                   Delete
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog open={bulkDeleteConfirmOpen} onOpenChange={(open) => {
+        if (!open && !bulkDeleting) {
+          setBulkDeleteConfirmOpen(false);
+          setSelectedRowIds([]);
+          setDeleteTaskId(null);
+          setDeleteProcessingStatus("");
+          setError(null);
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Bulk Delete Products</DialogTitle>
+            <DialogDescription>
+              {selectedRowIds.length === 0 
+                ? `Are you sure you want to delete ALL ${totalCount} product(s) in the database? This action cannot be undone.`
+                : `Are you sure you want to delete ${selectedRowIds.length} selected product(s)? This action cannot be undone.`
+              }
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4">
+            <div className="space-y-3">
+              <div className="text-sm">
+                <span className="font-medium">Number of products to delete:</span> {selectedRowIds.length === 0 ? totalCount : selectedRowIds.length}
+              </div>
+              {(selectedRowIds.length === 0 ? totalCount : selectedRowIds.length) < 100 ? (
+                <div className="flex items-start gap-2 text-sm bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md border border-blue-200 dark:border-blue-800">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-blue-600 dark:text-blue-400" />
+                  <div>
+                    <div className="font-medium text-blue-900 dark:text-blue-100 mb-1">Immediate Processing</div>
+                    <div className="text-blue-700 dark:text-blue-300">
+                      Since you're deleting less than 100 products, the deletion will be processed immediately. You'll see the results right away.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 text-sm bg-amber-50 dark:bg-amber-900/20 p-3 rounded-md border border-amber-200 dark:border-amber-800">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <div>
+                    <div className="font-medium text-amber-900 dark:text-amber-100 mb-1">Background Processing</div>
+                    <div className="text-amber-700 dark:text-amber-300">
+                      Since you're deleting 100 or more products, the deletion will be processed in the background. You can continue using the application while it processes. The dialog will show progress and close automatically when complete.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {deleteProcessingStatus && (
+            <div className="flex items-start gap-2 text-sm bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md border border-blue-200 dark:border-blue-800">
+              {bulkDeleting ? (
+                <Loader2 className="h-4 w-4 mt-0.5 shrink-0 animate-spin text-blue-600 dark:text-blue-400" />
+              ) : (
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-blue-600 dark:text-blue-400" />
+              )}
+              <div className="text-blue-700 dark:text-blue-300">{deleteProcessingStatus}</div>
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div className="whitespace-pre-wrap">{error}</div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (!bulkDeleting) {
+                  setBulkDeleteConfirmOpen(false);
+                  setSelectedRowIds([]);
+                  setDeleteTaskId(null);
+                  setDeleteProcessingStatus("");
+                  setError(null);
+                }
+              }}
+              disabled={bulkDeleting || !!deleteTaskId}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleBulkDeleteConfirm}
+              disabled={bulkDeleting || !!deleteTaskId}
+            >
+              {bulkDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {deleteTaskId ? "Processing..." : "Deleting..."}
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete {selectedRowIds.length === 0 ? totalCount : selectedRowIds.length} Product(s)
                 </>
               )}
             </Button>
