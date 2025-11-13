@@ -2,6 +2,7 @@ import { Loader2 } from 'lucide-react'
 import React, { Suspense } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router'
 import ProductsPage from '../pages/ProductsPage'
+import WebhooksPage from '../pages/WebhooksPage'
 
 // Loading component
 const PageLoader = () => (
@@ -17,6 +18,7 @@ const RoutesManager = (props: Props) => {
         <Routes>
             <Route path="/" element={<ProductsPage />} />
             <Route path="/products" element={<ProductsPage />} />
+            <Route path="/webhooks" element={<WebhooksPage />} />
         </Routes>
     )
 }

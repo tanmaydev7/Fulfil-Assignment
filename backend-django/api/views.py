@@ -2,18 +2,20 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
+from django.utils import timezone
 import os
 from celery.result import AsyncResult
 from basic_auth_app.celery import app as celery_app
 from django_celery_results.models import TaskResult
-from .models import Product
-from .tasks import add_numbers, bulk_delete_products
-from .serializers import AddNumbersSerializer, ProductSerializer
+from .models import Product, Webhook
+from .tasks import add_numbers, bulk_delete_products, send_webhook
+from .serializers import AddNumbersSerializer, ProductSerializer, WebhookSerializer
 from .utils import (
     generate_successful_response, 
     generate_error_response,
     handle_chunked_upload,
-    handle_complete_upload
+    handle_complete_upload,
+    trigger_webhooks
 )
 
 
@@ -370,8 +372,13 @@ class ProductEditView(APIView):
             if serializer.is_valid():
                 # Save product with active status
                 product = serializer.save()
+                
+                # Trigger webhook for product.created
+                product_data = ProductSerializer(product).data
+                trigger_webhooks('product.created', product_data)
+                
                 return generate_successful_response(
-                    ProductSerializer(product).data,
+                    product_data,
                     status=status.HTTP_201_CREATED
                 )
             else:
@@ -503,6 +510,12 @@ class ProductEditView(APIView):
                             status=status.HTTP_400_BAD_REQUEST
                         )
                 
+                # Trigger webhook for product.bulk_updated
+                trigger_webhooks('product.bulk_updated', {
+                    "count": len(updated_products),
+                    "products": updated_products
+                })
+                
                 return generate_successful_response({
                     "updated": len(updated_products),
                     "results": updated_products
@@ -536,8 +549,13 @@ class ProductEditView(APIView):
                 
                 if serializer.is_valid():
                     updated_product = serializer.save()
+                    
+                    # Trigger webhook for product.updated
+                    product_data = ProductSerializer(updated_product).data
+                    trigger_webhooks('product.updated', product_data)
+                    
                     return generate_successful_response(
-                        ProductSerializer(updated_product).data,
+                        product_data,
                         status=status.HTTP_200_OK
                     )
                 else:
@@ -640,6 +658,13 @@ class ProductEditView(APIView):
                             except Exception as e:
                                 errors.append(f"Error deleting product {product_id}: {str(e)}")
                     
+                    # Trigger webhook for product.bulk_deleted
+                    trigger_webhooks('product.bulk_deleted', {
+                        "deleted": deleted_count,
+                        "total": total_count,
+                        "ids": all_product_ids
+                    })
+                    
                     return generate_successful_response({
                         "deleted": deleted_count,
                         "total": total_count,
@@ -649,6 +674,14 @@ class ProductEditView(APIView):
                 else:
                     # Asynchronous processing
                     task = bulk_delete_products.apply_async([all_product_ids])
+                    
+                    # Trigger webhook for product.bulk_deleted (async)
+                    trigger_webhooks('product.bulk_deleted', {
+                        "total": total_count,
+                        "ids": all_product_ids,
+                        "async": True,
+                        "task_id": task.id
+                    })
                     
                     return generate_successful_response(
                         {
@@ -697,6 +730,13 @@ class ProductEditView(APIView):
                             except Exception as e:
                                 errors.append(f"Error deleting product {product_id}: {str(e)}")
                     
+                    # Trigger webhook for product.bulk_deleted
+                    trigger_webhooks('product.bulk_deleted', {
+                        "deleted": deleted_count,
+                        "total": total_count,
+                        "ids": product_ids
+                    })
+                    
                     return generate_successful_response({
                         "deleted": deleted_count,
                         "total": total_count,
@@ -706,6 +746,14 @@ class ProductEditView(APIView):
                 else:
                     # Asynchronous processing
                     task = bulk_delete_products.apply_async([product_ids])
+                    
+                    # Trigger webhook for product.bulk_deleted (async)
+                    trigger_webhooks('product.bulk_deleted', {
+                        "total": total_count,
+                        "ids": product_ids,
+                        "async": True,
+                        "task_id": task.id
+                    })
                     
                     return generate_successful_response(
                         {
@@ -727,7 +775,12 @@ class ProductEditView(APIView):
                         status=status.HTTP_404_NOT_FOUND
                     )
                 
+                # Get product data before deletion for webhook
+                product_data = ProductSerializer(product).data
                 product.delete()
+                
+                # Trigger webhook for product.deleted
+                trigger_webhooks('product.deleted', product_data)
                 
                 return generate_successful_response(
                     {
