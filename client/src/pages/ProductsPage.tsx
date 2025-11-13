@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useDebouncedCallback } from 'use-debounce'
 
-const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.BACKEND_URL
 
 interface Product {
   id: number;

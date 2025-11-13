@@ -11,7 +11,7 @@ import { Upload, FileText, Loader2, CheckCircle2, XCircle, AlertCircle } from "l
 import axios from "axios";
 
 const CHUNK_SIZE = 4 * 1024 * 1024; // 1MB chunks
-const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.BACKEND_URL
 
 type UploadStep = "upload" | "processing" | "success" | "error";
 

@@ -18,7 +18,7 @@ import {
 import { Loader2, AlertCircle } from "lucide-react";
 import axios from "axios";
 
-const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.BACKEND_URL
 
 interface Product {
   id: number;
