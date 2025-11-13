@@ -45,6 +45,7 @@ class Webhook(models.Model):
         ('product.deleted', 'Product Deleted'),
         ('product.bulk_updated', 'Product Bulk Updated'),
         ('product.bulk_deleted', 'Product Bulk Deleted'),
+        ('product.uploaded', 'Product Uploaded'),
     ]
     
     id = models.AutoField(primary_key=True, help_text="Primary key identifier")

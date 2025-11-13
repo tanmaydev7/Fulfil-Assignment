@@ -3,6 +3,7 @@ import React, { Suspense } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router'
 import ProductsPage from '../pages/ProductsPage'
 import WebhooksPage from '../pages/WebhooksPage'
+import { AppLayout } from '../components/AppLayout'
 
 // Loading component
 const PageLoader = () => (
@@ -16,9 +17,11 @@ type Props = {}
 const RoutesManager = (props: Props) => {
     return (
         <Routes>
-            <Route path="/" element={<ProductsPage />} />
-            <Route path="/products" element={<ProductsPage />} />
-            <Route path="/webhooks" element={<WebhooksPage />} />
+            <Route element={<AppLayout />}>
+                <Route path="/products" element={<ProductsPage />} />
+                <Route path="/webhooks" element={<WebhooksPage />} />
+                <Route path="*" element={<Navigate to="/products" replace />} />
+            </Route>
         </Routes>
     )
 }

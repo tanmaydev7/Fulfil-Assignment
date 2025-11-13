@@ -32,6 +32,7 @@ class WebhookSerializer(serializers.ModelSerializer):
             ('product.deleted', 'Product Deleted'),
             ('product.bulk_updated', 'Product Bulk Updated'),
             ('product.bulk_deleted', 'Product Bulk Deleted'),
+            ('product.uploaded', 'Product Uploaded'),
         ]),
         required=True,
         help_text="List of event types to trigger this webhook"

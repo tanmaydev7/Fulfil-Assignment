@@ -11,7 +11,7 @@ import {
 import { ProductUploadDialog } from "../components/ProductUploadDialog";
 import { AddProductDialog } from "../components/AddProductDialog";
 import { EditProductDialog } from "../components/EditProductDialog";
-import { Upload, RefreshCw, Plus, Pencil, Save, X, Trash2, AlertCircle, Loader2, FileX } from "lucide-react";
+import { Upload, RefreshCw, Plus, Pencil, Save, X, Trash2, AlertCircle, Loader2, FileX, Search } from "lucide-react";
 import axios from "axios";
 import { Table, TruncatedCell } from "@/src/components/table/table";
 import type { MRT_ColumnDef, MRT_Row } from "mantine-react-table";
@@ -28,6 +28,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useDebouncedCallback } from 'use-debounce'
 
 const API_BASE_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
@@ -67,23 +68,47 @@ export default function ProductsPage() {
   const [limit, setLimit] = useState(100);
   const [offset, setOffset] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [filters, setFilters] = useState({
+    sku: "",
+    name: "",
+    description: "",
+    status: "",
+  });
   const [inlineEditMode, setInlineEditMode] = useState(false);
   const [editedProducts, setEditedProducts] = useState<Map<number, Partial<Product>>>(new Map());
   const [editedCells, setEditedCells] = useState<Map<string, boolean>>(new Map()); // Track edited cells: "rowId-fieldName"
   const [saving, setSaving] = useState(false);
 
-  const fetchProducts = async () => {
+  const fetchProducts = async (lim?: number, off?: number, fil?: {sku: string, name: string, description: string, status: string}) => {
     setLoading(true);
     setError(null);
     try {
+      const params: Record<string, any> = {
+        limit: lim ?? limit,
+        offset: off ?? offset,
+      };
+      const skuFilter = ((fil?.sku ?? filters?.sku ?? ""))?.trim()
+      const descriptionFilter = ((fil?.description ?? filters?.description ?? ""))?.trim()
+      const nameFilter = ((fil?.name ?? filters?.name ?? ""))?.trim()
+      const statusFilter = ((fil?.status ?? filters?.status ?? ""))?.trim()
+
+      // Add filters to params if they have values
+      if (skuFilter) {
+        params.sku = skuFilter
+      }
+      if (nameFilter) {
+        params.name = nameFilter
+      }
+      if (descriptionFilter) {
+        params.description = descriptionFilter
+      }
+      if (statusFilter !== "all") {
+        params.status = statusFilter
+      }
+      
       const response = await axios.get<{ message: ProductsResponse }>(
         `${API_BASE_URL}/api/products/`,
-        {
-          params: {
-            limit,
-            offset,
-          },
-        }
+        { params }
       );
       const data = response.data.message;
       setProducts(data.results);
@@ -96,11 +121,16 @@ export default function ProductsPage() {
     }
   };
 
+
+  const debounceFetchProducts = useDebouncedCallback((limit, offset, filters) => {
+    fetchProducts(limit, offset, filters)
+  }, 500)
+
   useEffect(() => {
     fetchProducts();
     // Clear selection when page changes
     setSelectedRowIds([]);
-  }, [limit, offset]);
+  }, []);
 
   const currentPage = Math.floor(offset / limit);
   const pageSize = limit;
@@ -380,11 +410,13 @@ export default function ProductsPage() {
 
   const handlePageChange = (page: number) => {
     setOffset(page * limit);
+    fetchProducts(limit, page * limit, filters)
   };
 
   const handlePageSizeChange = (newPageSize: number) => {
     setLimit(newPageSize);
     setOffset(0);
+    fetchProducts(newPageSize, 0, filters)
   };
 
   const handleEditProduct = (product: Product) => {
@@ -475,6 +507,7 @@ export default function ProductsPage() {
           ? err.response?.data?.message
           : err.response?.data?.message?.errors?.join(' ') || err.message || "Failed to delete products";
       setError(errorMessage);
+    } finally {
       setBulkDeleting(false);
     }
   };
@@ -483,7 +516,7 @@ export default function ProductsPage() {
   useEffect(() => {
     if (deleteTaskId && bulkDeleteConfirmOpen) {
       let pollCount = 0;
-      const maxPolls = 300; // Max 10 minutes
+      const maxPolls = 60; // Max 10 minutes (60 * 10 seconds)
       
       const pollInterval = setInterval(async () => {
         pollCount++;
@@ -535,14 +568,14 @@ export default function ProductsPage() {
             clearInterval(pollInterval);
           }
         }
-      }, 2000); // Poll every 2 seconds
+      }, 10000); // Poll every 10 seconds
 
       return () => clearInterval(pollInterval);
     }
-  }, [deleteTaskId, bulkDeleteConfirmOpen]);
+  }, [deleteTaskId, bulkDeleteConfirmOpen, limit, offset, filters]);
 
   return (
-    <div className="container mx-auto p-6 h-screen max-h-screen flex flex-col overflow-hidden">
+    <div className="container mx-auto p-6 h-full flex flex-col overflow-hidden">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Products</h1>
@@ -593,7 +626,7 @@ export default function ProductsPage() {
                 <Button 
                   variant="outline" 
                   size="icon"
-                  onClick={fetchProducts} 
+                  onClick={() => fetchProducts()} 
                   disabled={loading || saving}
                 >
                   <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -662,8 +695,120 @@ export default function ProductsPage() {
                 </TooltipContent>
               </Tooltip>
             )}
-        </div>
+          </div>
         </TooltipProvider>
+      </div>
+
+      {/* Filters */}
+      <div className="mb-4 p-4 border rounded-lg bg-background">
+        <div className="flex items-center gap-2 mb-3">
+          <Search className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">Filters</h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div className="space-y-1">
+            <label htmlFor="filter-sku" className="text-xs font-medium text-muted-foreground">
+              SKU
+            </label>
+            <input
+              id="filter-sku"
+              type="text"
+              value={filters.sku}
+              onChange={(e) => {
+                setOffset(0); // Reset to first page when filter changes
+                setFilters((prev) => {
+                  debounceFetchProducts(limit, 0, ({ ...prev, sku: e.target.value }))
+                  return ({ ...prev, sku: e.target.value })
+                });
+              }}
+              placeholder="Filter by SKU..."
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="filter-name" className="text-xs font-medium text-muted-foreground">
+              Name
+            </label>
+            <input
+              id="filter-name"
+              type="text"
+              value={filters.name}
+              onChange={(e) => {
+                setOffset(0); // Reset to first page when filter changes
+                setFilters((prev) => {
+                  debounceFetchProducts(limit, 0, ({ ...prev, name: e.target.value }))
+                  return ({ ...prev, name: e.target.value })
+                });
+              }}
+              placeholder="Filter by name..."
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="filter-description" className="text-xs font-medium text-muted-foreground">
+              Description
+            </label>
+            <input
+              id="filter-description"
+              type="text"
+              value={filters.description}
+              onChange={(e) => {
+                setOffset(0); // Reset to first page when filter changes
+                setFilters((prev) => {
+                  debounceFetchProducts(limit, 0, ({ ...prev, description: e.target.value }))
+                  return ({ ...prev, description: e.target.value })
+                });
+              }}
+              placeholder="Filter by description..."
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="filter-status" className="text-xs font-medium text-muted-foreground">
+              Status
+            </label>
+            <Select
+              value={filters.status}
+              onValueChange={(value) => {
+                setOffset(0);
+                setFilters((prev) => {
+                  debounceFetchProducts(limit, 0, ({ ...prev, status: value }))
+                  return ({ ...prev, status: value })
+                });
+              }}
+            >
+              <SelectTrigger id="filter-status" className="h-9 w-full">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          
+          <div className="gap-1 flex flex-col">
+            <label htmlFor="" className="text-xs font-medium text-muted-foreground mb-1">
+              &nbsp;
+            </label>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setFilters({ sku: "", name: "", description: "", status: "" });
+                setOffset(0);
+                fetchProducts(limit, 0, { sku: "", name: "", description: "", status: "" })
+              }}
+              className="h-9"
+              disabled={!(filters.sku || filters.name || filters.description || (filters.status && filters.status !== "all"))}
+            >
+              <X className="h-3 w-3 mr-1" />
+              Clear Filters
+            </Button>
+          </div>
+        </div>
+        
       </div>
 
       {/* Products Table */}
@@ -671,7 +816,7 @@ export default function ProductsPage() {
         {error ? (
           <div className="p-8 text-center">
             <p className="text-destructive">{error}</p>
-            <Button onClick={fetchProducts} variant="outline" className="mt-4">
+            <Button onClick={() => fetchProducts()} variant="outline" className="mt-4">
               Retry
             </Button>
           </div>
@@ -737,13 +882,8 @@ export default function ProductsPage() {
 
       <ProductUploadDialog
         open={uploadDialogOpen}
-        onOpenChange={(open) => {
-          setUploadDialogOpen(open);
-          if (!open) {
-            // Refresh products when dialog closes (in case upload was successful)
-            fetchProducts();
-          }
-        }}
+        onOpenChange={setUploadDialogOpen}
+        onSuccess={fetchProducts}
       />
 
       {/* Delete Confirmation Dialog */}

@@ -43,16 +43,59 @@ def bulk_delete_products(product_ids):
         }
         
         # Trigger webhook for product.bulk_deleted after async deletion completes
-        from .utils import trigger_webhooks
-        trigger_webhooks('product.bulk_deleted', {
+        trigger_webhooks_task.apply_async(args=['product.bulk_deleted', {
             "deleted": deleted_count,
             "total": len(product_ids),
             "ids": product_ids
-        })
+        }])
         
         return result
     except Exception as e:
         raise ValueError(f"Bulk delete failed: {str(e)}")
+
+
+@shared_task
+def trigger_webhooks_task(event_type, payload):
+    """
+    Celery task to trigger webhooks for a given event type.
+    This task fetches webhooks from the database and triggers them asynchronously.
+    
+    Args:
+        event_type: The event type (e.g., 'product.created', 'product.updated')
+        payload: The payload data to send to webhooks
+    
+    Returns:
+        dict: Number of webhooks triggered
+    """
+    try:
+        from .models import Webhook
+        
+        # Get all enabled webhooks
+        all_webhooks = Webhook.objects.filter(enabled=True)
+        
+        # Filter webhooks that subscribe to this event type
+        webhooks = [
+            webhook for webhook in all_webhooks
+            if event_type in (webhook.event_types or [])
+        ]
+        
+        # Trigger each webhook asynchronously
+        for webhook in webhooks:
+            send_webhook.delay(webhook.id, event_type, payload)
+        
+        return {
+            "success": True,
+            "webhooks_triggered": len(webhooks),
+            "event_type": event_type
+        }
+    except Exception as e:
+        # Don't fail the main operation if webhook triggering fails
+        print(f"Error triggering webhooks: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "webhooks_triggered": 0
+        }
 
 
 @shared_task
@@ -171,23 +214,6 @@ def send_webhook(webhook_id, event_type, payload):
 
 
 @shared_task
-def add_numbers(x, y):
-    """
-    Celery task that adds two numbers in the background.
-    
-    Args:
-        x: First number
-        y: Second number
-    
-    Returns:
-        Sum of x and y
-    """
-    result = x + y
-    print(f"Adding {x} + {y} = {result}")
-    return result
-
-
-@shared_task
 def process_product_file(file_path):
     """
     Process uploaded CSV file and import products in chunks.
@@ -200,7 +226,6 @@ def process_product_file(file_path):
     Returns:
         dict: Processing results with success count, error count, and errors
     """
-    print('Task queued')
     success_count = 0
     chunksize = 100  # Read and process CSV in chunks of 100 rows
     
@@ -271,12 +296,21 @@ def process_product_file(file_path):
         if os.path.exists(file_path):
             os.remove(file_path)
         
-        return {
+        result = {
             'success': True,
             'success_count': success_count,
             'error_count': 0,
             'total_processed': success_count,
         }
+        
+        # Trigger webhook for product.uploaded after successful upload
+        trigger_webhooks_task.apply_async(args=['product.uploaded', {
+            "success_count": success_count,
+            "total_processed": success_count,
+            "upload_type": "csv"
+        }])
+        
+        return result
     
     except Exception as e:
         # Clean up file on error
