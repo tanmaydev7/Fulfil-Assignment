@@ -1,3 +1,21 @@
 from rest_framework import serializers
-from .models import Product
 from decimal import Decimal
+from .models import Product
+
+
+class AddNumbersSerializer(serializers.Serializer):
+    """
+    Serializer for validating add numbers request.
+    """
+    x = serializers.FloatField(help_text="First number to add")
+    y = serializers.FloatField(help_text="Second number to add")
+
+
+class ProductSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Product model.
+    """
+    class Meta:
+        model = Product
+        fields = ['id', 'sku', 'name', 'description', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
