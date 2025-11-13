@@ -278,6 +278,10 @@ class ProductListView(APIView):
         Query parameters:
         - limit: Number of products to return (default: 100, max: 1000)
         - offset: Number of products to skip (default: 0)
+        - sku: Filter by SKU (case-insensitive partial match)
+        - name: Filter by name (case-insensitive partial match)
+        - description: Filter by description (case-insensitive partial match)
+        - status: Filter by status (exact match: 'active' or 'inactive')
         
         Returns:
         {
@@ -308,11 +312,35 @@ class ProductListView(APIView):
             except (ValueError, TypeError):
                 offset = 0
             
-            # Get total count (optimized single query)
-            total_count = Product.objects.count()
+            # Get filter parameters
+            sku_filter = request.query_params.get('sku', '').strip()
+            name_filter = request.query_params.get('name', '').strip()
+            description_filter = request.query_params.get('description', '').strip()
+            status_filter = request.query_params.get('status', '').strip()
+            
+            # Build query with filters
+            products_query = Product.objects.all()
+            
+            # Apply filters (case-insensitive partial match using icontains)
+            if sku_filter:
+                products_query = products_query.filter(sku__icontains=sku_filter)
+            
+            if name_filter:
+                products_query = products_query.filter(name__icontains=name_filter)
+            
+            if description_filter:
+                products_query = products_query.filter(description__icontains=description_filter)
+            
+            if status_filter:
+                # Status filter - exact match (active or inactive)
+                if status_filter.lower() in ['active', 'inactive']:
+                    products_query = products_query.filter(status=status_filter.lower())
+            
+            # Get total count after applying filters
+            total_count = products_query.count()
             
             # Get paginated products ordered by updated_at descending (newest first)
-            products = Product.objects.all().order_by('-updated_at')[offset:offset + limit]
+            products = products_query.order_by('-updated_at')[offset:offset + limit]
             
             # Serialize products
             serializer = ProductSerializer(products, many=True)
