@@ -235,7 +235,16 @@ const Table = <TData extends Record<string, any>>({
 
 	return (
 		<div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
-			<MantineReactTable key={singleRow ? 'single' : 'multi'} table={table} />
+			{
+				(
+					memoData.length <= 2 ? (
+						<MantineReactTable key={singleRow ? 'single' : 'multi'} table={table} />
+					) : (
+
+						<MantineReactTable key={singleRow ? 'single' : 'multi'} table={table} />
+					)
+				)
+			}
 		</div>
 	)
 	

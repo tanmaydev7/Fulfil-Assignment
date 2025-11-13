@@ -331,9 +331,10 @@ class ProductListView(APIView):
 
 class ProductEditView(APIView):
     """
-    API view to create and update products.
+    API view to create, update, and delete products.
     POST: Create a new product
-    PATCH: Update an existing product by SKU
+    PATCH: Update an existing product
+    DELETE: Delete a product by ID
     """
     
     def post(self, request):
@@ -387,9 +388,9 @@ class ProductEditView(APIView):
     
     def patch(self, request):
         """
-        Update an existing product by ID.
+        Update products - supports both single and batch updates.
         
-        Request body:
+        Single update request body:
         {
             "id": 1,  # Product ID to identify the product (required)
             "sku": "PROD-001",  # Optional: can be updated
@@ -398,12 +399,33 @@ class ProductEditView(APIView):
             "status": "active" or "inactive"
         }
         
+        Batch update request body:
+        {
+            "update_operations": [
+                {
+                    "id": 1,
+                    "sku": "PROD-001",
+                    "name": "Updated Product Name",
+                    "description": "Updated description",
+                    "status": "active"
+                },
+                {
+                    "id": 2,
+                    "sku": "PROD-002",
+                    "name": "Another Product",
+                    "status": "inactive"
+                }
+            ]
+        }
+        
         Note: 
-        - "id" is required in the payload to identify the product to update.
+        - For single update: "id" is required in the payload to identify the product.
+        - For batch update: "update_operations" array is required.
         - SKU can be updated but must remain unique.
         - All other fields are optional.
         
         Returns:
+        Single update:
         {
             "message": {
                 "id": 1,
@@ -415,14 +437,145 @@ class ProductEditView(APIView):
                 "updated_at": "2024-01-01T00:00:00Z"
             }
         }
+        
+        Batch update:
+        {
+            "message": {
+                "updated": 2,
+                "results": [
+                    {...product1...},
+                    {...product2...}
+                ]
+            }
+        }
         """
         try:
-            # Get ID from request data to identify the product
+            from django.db import transaction
+            
+            # Check if this is a batch update
+            update_operations = request.data.get('update_operations')
+            
+            if update_operations:
+                # Batch update
+                if not isinstance(update_operations, list):
+                    return generate_error_response(
+                        "update_operations must be an array",
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                if len(update_operations) == 0:
+                    return generate_error_response(
+                        "update_operations array cannot be empty",
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                updated_products = []
+                errors = []
+                
+                with transaction.atomic():
+                    for idx, operation in enumerate(update_operations):
+                        product_id = operation.get('id')
+                        
+                        if not product_id:
+                            errors.append(f"Operation {idx + 1}: id is required")
+                            continue
+                        
+                        try:
+                            product = Product.objects.get(id=product_id)
+                        except Product.DoesNotExist:
+                            errors.append(f"Operation {idx + 1}: Product with id '{product_id}' not found")
+                            continue
+                        
+                        # Prepare update data (exclude id)
+                        update_data = {k: v for k, v in operation.items() if k != 'id'}
+                        
+                        serializer = ProductSerializer(product, data=update_data, partial=True)
+                        
+                        if serializer.is_valid():
+                            updated_product = serializer.save()
+                            updated_products.append(ProductSerializer(updated_product).data)
+                        else:
+                            errors.append(f"Operation {idx + 1}: {serializer.errors}")
+                    
+                    if errors:
+                        return generate_error_response(
+                            {"errors": errors, "updated": len(updated_products)},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                
+                return generate_successful_response({
+                    "updated": len(updated_products),
+                    "results": updated_products
+                })
+            
+            else:
+                # Single update (backward compatibility)
+                product_id = request.data.get('id')
+                
+                if not product_id:
+                    return generate_error_response(
+                        "id is required in request body to identify the product",
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Get the product
+                try:
+                    product = Product.objects.get(id=product_id)
+                except Product.DoesNotExist:
+                    return generate_error_response(
+                        f"Product with id '{product_id}' not found",
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # Update product with partial data (id is read-only, so exclude it from update)
+                update_data = request.data.copy()
+                # Remove id from update data as it's the primary key and shouldn't be changed
+                update_data.pop('id', None)
+                
+                serializer = ProductSerializer(product, data=update_data, partial=True)
+                
+                if serializer.is_valid():
+                    updated_product = serializer.save()
+                    return generate_successful_response(
+                        ProductSerializer(updated_product).data,
+                        status=status.HTTP_200_OK
+                    )
+                else:
+                    return generate_error_response(
+                        serializer.errors,
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+        
+        except Exception as e:
+            return generate_error_response(
+                str(e),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def delete(self, request):
+        """
+        Delete a product by ID.
+        
+        Request body:
+        {
+            "id": 1  # Product ID to delete (required)
+        }
+        
+        Returns:
+        {
+            "message": {
+                "id": 1,
+                "message": "Product deleted successfully"
+            }
+        }
+        """
+        try:
+            # Get ID from request data
             product_id = request.data.get('id')
             
             if not product_id:
                 return generate_error_response(
-                    "id is required in request body to identify the product",
+                    "id is required in request body to identify the product to delete",
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
@@ -435,24 +588,16 @@ class ProductEditView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Update product with partial data (id is read-only, so exclude it from update)
-            update_data = request.data.copy()
-            # Remove id from update data as it's the primary key and shouldn't be changed
-            update_data.pop('id', None)
+            # Delete the product
+            product.delete()
             
-            serializer = ProductSerializer(product, data=update_data, partial=True)
-            
-            if serializer.is_valid():
-                updated_product = serializer.save()
-                return generate_successful_response(
-                    ProductSerializer(updated_product).data,
-                    status=status.HTTP_200_OK
-                )
-            else:
-                return generate_error_response(
-                    serializer.errors,
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            return generate_successful_response(
+                {
+                    "id": product_id,
+                    "message": "Product deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
         
         except Exception as e:
             return generate_error_response(
