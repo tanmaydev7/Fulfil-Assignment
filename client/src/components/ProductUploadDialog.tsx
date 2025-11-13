@@ -18,9 +18,10 @@ type UploadStep = "upload" | "processing" | "success" | "error";
 interface UploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSuccess?: () => void;
 }
 
-export function ProductUploadDialog({ open, onOpenChange }: UploadDialogProps) {
+export function ProductUploadDialog({ open, onOpenChange, onSuccess }: UploadDialogProps) {
   const [step, setStep] = useState<UploadStep>("upload");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -51,7 +52,7 @@ export function ProductUploadDialog({ open, onOpenChange }: UploadDialogProps) {
   useEffect(() => {
     if (step === "processing" && taskId) {
       let pollCount = 0;
-      const maxPolls = 300; // Max 10 minutes (300 * 2 seconds)
+      const maxPolls = 60; // Max 10 minutes (60 * 10 seconds)
       
       const pollInterval = setInterval(async () => {
         pollCount++;
@@ -73,6 +74,10 @@ export function ProductUploadDialog({ open, onOpenChange }: UploadDialogProps) {
             setStep("success");
             setProcessingStatus("Processing completed successfully!");
             clearInterval(pollInterval);
+            // Trigger success callback to refresh products
+            if (onSuccess) {
+              onSuccess();
+            }
           } else if (taskData.state === "FAILURE") {
             setStep("error");
             const errorMsg = taskData.error || taskData.result?.error || "Processing failed";
@@ -98,7 +103,7 @@ export function ProductUploadDialog({ open, onOpenChange }: UploadDialogProps) {
             clearInterval(pollInterval);
           }
         }
-      }, 2000); // Poll every 2 seconds
+      }, 10000); // Poll every 10 seconds
 
       return () => clearInterval(pollInterval);
     }
@@ -167,7 +172,7 @@ export function ProductUploadDialog({ open, onOpenChange }: UploadDialogProps) {
           setTaskId(data.task_id);
           setStep("processing");
           setUploadProgress(100);
-          setProcessingStatus("File uploaded. Starting processing...");
+          setProcessingStatus("File uploaded. Scheduled job for processing csv...");
         }
       }
     } catch (err: any) {

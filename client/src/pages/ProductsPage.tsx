@@ -475,6 +475,7 @@ export default function ProductsPage() {
           ? err.response?.data?.message
           : err.response?.data?.message?.errors?.join(' ') || err.message || "Failed to delete products";
       setError(errorMessage);
+    } finally {
       setBulkDeleting(false);
     }
   };
@@ -483,7 +484,7 @@ export default function ProductsPage() {
   useEffect(() => {
     if (deleteTaskId && bulkDeleteConfirmOpen) {
       let pollCount = 0;
-      const maxPolls = 300; // Max 10 minutes
+      const maxPolls = 60; // Max 10 minutes (60 * 10 seconds)
       
       const pollInterval = setInterval(async () => {
         pollCount++;
@@ -535,7 +536,7 @@ export default function ProductsPage() {
             clearInterval(pollInterval);
           }
         }
-      }, 2000); // Poll every 2 seconds
+      }, 10000); // Poll every 10 seconds
 
       return () => clearInterval(pollInterval);
     }
@@ -737,13 +738,8 @@ export default function ProductsPage() {
 
       <ProductUploadDialog
         open={uploadDialogOpen}
-        onOpenChange={(open) => {
-          setUploadDialogOpen(open);
-          if (!open) {
-            // Refresh products when dialog closes (in case upload was successful)
-            fetchProducts();
-          }
-        }}
+        onOpenChange={setUploadDialogOpen}
+        onSuccess={fetchProducts}
       />
 
       {/* Delete Confirmation Dialog */}
