@@ -73,7 +73,7 @@ export default defineConfig({
 			template: "./index.html"
 		}),
 		isDev ? new ReactRefreshRspackPlugin() : null,
-		isDev ? new DotenvWebpackPlugin() : null
+		new DotenvWebpackPlugin()
 	].filter(Boolean),
 	optimization: {
 		minimizer: [

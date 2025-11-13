@@ -153,7 +153,7 @@ A full-stack web application for managing products with advanced features includ
 3. **Configure environment**
    - Create `.env` file with:
      ```
-     BACKEND_URL=http://localhost:8000
+     REACT_APP_BACKEND_URL=http://localhost:8000
      ```
 
 4. **Start development server**
