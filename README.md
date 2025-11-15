@@ -629,7 +629,7 @@ Tasks can have the following states:
 
 ## 🚀 Deployment
 
-### Backend Deployment
+### Backend Deployment [Backend Deployment Aamazon EC2 proper Steps](./Backend-Deployment.md)
 1. Set up PostgreSQL database
 2. Configure environment variables
 3. Run migrations: `python manage.py migrate`
